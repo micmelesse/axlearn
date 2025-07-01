@@ -171,4 +171,5 @@ wandb/
 .axlearn.config
 
 # misc
+.profile
 scripts
