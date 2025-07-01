@@ -28,6 +28,7 @@ Compared to the implementation in the JAX repo, we made the following enhancemen
 * Support dropout.
 * Support arbitrary mask function like Pytorch FlexAttention.
 """
+import os
 import functools
 from collections.abc import Sequence
 from typing import Any, Optional, Tuple
@@ -70,6 +71,9 @@ from axlearn.common.flash_attention.remat import FLASH_ATTN_RESIDUAL_NAME
 from axlearn.common.layers import get_dropout_mask
 from axlearn.common.utils import Tensor
 from axlearn.common.flash_attention.gpu_attention_pallas_cj import mha 
+
+# env vars
+USE_AITER_PARAMS = os.environ.get('USE_AITER_PARAMS', '0').lower() in ('1', 'true', 'yes')
 
 class NoPopDict(dict):
     """A dict that doesn't delete after pop.
@@ -332,9 +336,14 @@ def _flash_attention_impl(
     """
     batch_size, q_seq_len, num_heads, head_dim = query.shape
     kv_seq_len = key.shape[1]
-    block_q = min(block_q, q_seq_len)
-    block_k = min(block_k, kv_seq_len)
-    block_d = pl.next_power_of_2(head_dim)
+    if USE_AITER_PARAMS:
+        block_q = 128
+        block_k = 64
+        block_d = 128
+    else:
+        block_q = min(block_q, q_seq_len)
+        block_k = min(block_k, kv_seq_len)
+        block_d = pl.next_power_of_2(head_dim)
     assert q_seq_len % block_q == 0
     assert kv_seq_len % block_k == 0
     # Heuristics.
@@ -342,11 +351,17 @@ def _flash_attention_impl(
     if grid_ is None:
         grid_ = (pl.cdiv(q_seq_len, block_q), batch_size, num_heads)
     if num_stages is None:
-        num_stages = (
-            2 if bias is None and jnp.float32 not in (query.dtype, key.dtype, value.dtype) else 1
-        )
+        if USE_AITER_PARAMS:
+            num_stages = 1
+        else:
+            num_stages = (
+                2 if bias is None and jnp.float32 not in (query.dtype, key.dtype, value.dtype) else 1
+            )
     if num_warps is None:
-        num_warps = 4 if head_dim <= 64 else 8
+        if USE_AITER_PARAMS:
+            num_warps = 4
+        else:
+            num_warps = 4 if head_dim <= 64 else 8
     kernel = functools.partial(
         _mha_forward_kernel,
         softmax_scale=softmax_scale,
