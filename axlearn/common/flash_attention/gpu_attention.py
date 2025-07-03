@@ -44,6 +44,7 @@ from jax._src.cudnn.fused_attention_stablehlo import (
 )
 from jax.ad_checkpoint import checkpoint_name
 from jax.experimental import pallas as pl
+from jax.experimental.pallas import triton as plgpu
 try:
     from transformer_engine.jax.flax.transformer import DotProductAttention
 except:
@@ -432,17 +433,32 @@ def _flash_attention_impl(
                 shape=(batch_size, num_heads, q_seq_len), dtype=jnp.float32
             ),  # lse
         ]
-    pallas_out = pl.pallas_call(
-        kernel,
-        grid=grid_,
-        in_specs=in_specs,
-        out_specs=out_specs,
-        compiler_params=NoPopDict(triton=NoPopDict(num_warps=num_warps, num_stages=num_stages)),
-        out_shape=out_shape,
-        debug=debug,
-        interpret=interpret,
-        name="mha_forward",
-    )(query, key, value, bias, segment_ids, dropout_mask, index_offset, index_offset_size)
+
+
+    if USE_AITER_PARAMS:
+        pallas_out = pl.pallas_call(
+            kernel,
+            grid=grid_,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            compiler_params=NoPopDict(triton=NoPopDict(num_warps=num_warps, num_stages=num_stages, waves_per_eu = 2)),
+            out_shape=out_shape,
+            debug=debug,
+            interpret=interpret,
+            name="mha_forward",
+        )(query, key, value, bias, segment_ids, dropout_mask, index_offset, index_offset_size)
+    else:
+        pallas_out = pl.pallas_call(
+            kernel,
+            grid=grid_,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            compiler_params=NoPopDict(triton=NoPopDict(num_warps=num_warps, num_stages=num_stages)),
+            out_shape=out_shape,
+            debug=debug,
+            interpret=interpret,
+            name="mha_forward",
+        )(query, key, value, bias, segment_ids, dropout_mask, index_offset, index_offset_size)
     if output_activations:
         out, lse = pallas_out
         out = checkpoint_name(out, f"gpu_attention.{FLASH_ATTN_RESIDUAL_NAME}")
